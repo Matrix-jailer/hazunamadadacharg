@@ -124,14 +124,31 @@ async def create_payment_method(fullz: str, session):
             max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    # Ensure we accept and decode gzip/deflate/br
                     response = session.get(url, timeout=90, allow_redirects=True)
+                    
+                    # Force decode if content is compressed
+                    try:
+                        response_text = response.text
+                    except Exception as decode_error:
+                        print(f"⚠️ Decoding error: {decode_error}")
+                        # Try manual decoding
+                        import gzip
+                        try:
+                            response_text = gzip.decompress(response.content).decode('utf-8')
+                        except:
+                            response_text = response.content.decode('utf-8', errors='ignore')
+                    
                     # Check if we got a Cloudflare challenge
-                    if 'cloudflare' in response.text.lower() and 'just a moment' in response.text.lower():
+                    if 'cloudflare' in response_text.lower() and 'just a moment' in response_text.lower():
                         if attempt < max_retries - 1:
                             print(f"⚠️ Cloudflare challenge detected, retry {attempt + 1}/{max_retries}")
                             import time
                             time.sleep(5 * (attempt + 1))  # Exponential backoff
                             continue
+                    
+                    # Store decoded text in response object for later use
+                    response._decoded_text = response_text
                     return response
                 except Exception as e:
                     if attempt < max_retries - 1:
@@ -144,7 +161,18 @@ async def create_payment_method(fullz: str, session):
         
         final = await loop.run_in_executor(None, make_request)
 
-        response_text = final.text or ""
+        # Use the decoded text if available, otherwise try to decode
+        if hasattr(final, '_decoded_text'):
+            response_text = final._decoded_text
+        else:
+            try:
+                response_text = final.text
+            except Exception:
+                import gzip
+                try:
+                    response_text = gzip.decompress(final.content).decode('utf-8')
+                except:
+                    response_text = final.content.decode('utf-8', errors='ignore')
 
         # debug log
         print("🔹 API Raw Response (truncated 800 chars):")
