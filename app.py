@@ -121,26 +121,72 @@ async def create_payment_method(fullz: str, session):
         loop = asyncio.get_event_loop()
         
         def make_request():
+            import gzip
+            import zlib
+            import brotli
+            
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     # Ensure we accept and decode gzip/deflate/br
                     response = session.get(url, timeout=90, allow_redirects=True)
                     
-                    # Force decode if content is compressed
+                    # Get raw content
+                    raw_content = response.content
+                    
+                    # Try multiple decompression methods
+                    response_text = None
+                    
+                    # Method 1: Try response.text (automatic decoding)
                     try:
                         response_text = response.text
-                    except Exception as decode_error:
-                        print(f"⚠️ Decoding error: {decode_error}")
-                        # Try manual decoding
-                        import gzip
+                        print(f"✅ Decoded using response.text")
+                    except Exception as e:
+                        print(f"⚠️ response.text failed: {e}")
+                    
+                    # Method 2: Try gzip decompression
+                    if not response_text or len(response_text) < 10:
                         try:
-                            response_text = gzip.decompress(response.content).decode('utf-8')
-                        except:
-                            response_text = response.content.decode('utf-8', errors='ignore')
+                            response_text = gzip.decompress(raw_content).decode('utf-8')
+                            print(f"✅ Decoded using gzip")
+                        except Exception as e:
+                            print(f"⚠️ gzip failed: {e}")
+                    
+                    # Method 3: Try zlib/deflate decompression
+                    if not response_text or len(response_text) < 10:
+                        try:
+                            response_text = zlib.decompress(raw_content).decode('utf-8')
+                            print(f"✅ Decoded using zlib")
+                        except Exception as e:
+                            print(f"⚠️ zlib failed: {e}")
+                    
+                    # Method 4: Try zlib with -zlib.MAX_WBITS (raw deflate)
+                    if not response_text or len(response_text) < 10:
+                        try:
+                            response_text = zlib.decompress(raw_content, -zlib.MAX_WBITS).decode('utf-8')
+                            print(f"✅ Decoded using raw deflate")
+                        except Exception as e:
+                            print(f"⚠️ raw deflate failed: {e}")
+                    
+                    # Method 5: Try brotli decompression
+                    if not response_text or len(response_text) < 10:
+                        try:
+                            response_text = brotli.decompress(raw_content).decode('utf-8')
+                            print(f"✅ Decoded using brotli")
+                        except Exception as e:
+                            print(f"⚠️ brotli failed: {e}")
+                    
+                    # Method 6: Fallback to raw decode with error handling
+                    if not response_text or len(response_text) < 10:
+                        try:
+                            response_text = raw_content.decode('utf-8', errors='ignore')
+                            print(f"⚠️ Using raw decode with errors ignored")
+                        except Exception as e:
+                            print(f"⚠️ raw decode failed: {e}")
+                            response_text = str(raw_content)
                     
                     # Check if we got a Cloudflare challenge
-                    if 'cloudflare' in response_text.lower() and 'just a moment' in response_text.lower():
+                    if response_text and 'cloudflare' in response_text.lower() and 'just a moment' in response_text.lower():
                         if attempt < max_retries - 1:
                             print(f"⚠️ Cloudflare challenge detected, retry {attempt + 1}/{max_retries}")
                             import time
@@ -161,18 +207,8 @@ async def create_payment_method(fullz: str, session):
         
         final = await loop.run_in_executor(None, make_request)
 
-        # Use the decoded text if available, otherwise try to decode
-        if hasattr(final, '_decoded_text'):
-            response_text = final._decoded_text
-        else:
-            try:
-                response_text = final.text
-            except Exception:
-                import gzip
-                try:
-                    response_text = gzip.decompress(final.content).decode('utf-8')
-                except:
-                    response_text = final.content.decode('utf-8', errors='ignore')
+        # Use the decoded text from make_request
+        response_text = final._decoded_text if hasattr(final, '_decoded_text') else final.text
 
         # debug log
         print("🔹 API Raw Response (truncated 800 chars):")
