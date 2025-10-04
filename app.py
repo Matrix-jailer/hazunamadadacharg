@@ -71,15 +71,28 @@ async def get_session():
             'platform': 'windows',
             'mobile': False
         },
-        delay=10
+        delay=15,
+        captcha={
+            'provider': '2captcha',
+            'api_key': 'your_2captcha_key'
+        } if False else None  # Disable captcha solving for now
     )
+    
+    # More comprehensive headers to mimic real browser
     scraper.headers.update({
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "accept-language": "en-US,en;q=0.9",
+        "accept-encoding": "gzip, deflate, br",
         "user-agent": ua,
-        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not A(Brand)";v="99"',
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
-        "referer": "https://google.com/",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
+        "cache-control": "max-age=0",
     })
     return scraper
 
@@ -104,9 +117,32 @@ async def create_payment_method(fullz: str, session):
             f'&xlite=undefined'
         )
 
-        # Use cloudscraper to bypass CF
+        # Use cloudscraper to bypass CF with retries
         loop = asyncio.get_event_loop()
-        final = await loop.run_in_executor(None, lambda: session.get(url, timeout=60))
+        
+        def make_request():
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    response = session.get(url, timeout=90, allow_redirects=True)
+                    # Check if we got a Cloudflare challenge
+                    if 'cloudflare' in response.text.lower() and 'just a moment' in response.text.lower():
+                        if attempt < max_retries - 1:
+                            print(f"⚠️ Cloudflare challenge detected, retry {attempt + 1}/{max_retries}")
+                            import time
+                            time.sleep(5 * (attempt + 1))  # Exponential backoff
+                            continue
+                    return response
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        print(f"⚠️ Request failed, retry {attempt + 1}/{max_retries}: {str(e)}")
+                        import time
+                        time.sleep(3)
+                        continue
+                    raise
+            return response
+        
+        final = await loop.run_in_executor(None, make_request)
 
         response_text = final.text or ""
 
