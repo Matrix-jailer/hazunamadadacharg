@@ -105,7 +105,8 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_ur
         elif "LIVE CCN" in response_text:
             status, message = "live", "Invalid CVV → CCN"
         else:
-            status, message = "error", "API ISSUE"
+            # show actual API text instead of generic "API ISSUE"
+            status, message = "error", f"Unexpected API Response: {response_text[:400]}"
 
         return CCResponse(
             card=fullz,
@@ -115,10 +116,14 @@ async def create_payment_method(fullz: str, session: httpx.AsyncClient, proxy_ur
         )
 
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print("⚠️ Exception occurred while processing:", fullz)
+        print(error_details)
         return CCResponse(
             card=fullz,
             status="error",
-            message=f"Exception: {str(e)}",
+            message=error_details[:400],  # limit to avoid huge outputs
             proxy_used=proxy_url,
         )
 
